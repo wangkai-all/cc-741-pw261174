@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>电池批次退化数据应用 · 双阶段模型 / 轮廓似然 / 检测设计</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 19c4 0 5-3 8-7s5-6 8-6' fill='none' stroke='%232a78d6' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='4' cy='19' r='2.2' fill='%232a78d6'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ===================== 顶栏 ===================== -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 19c4 0 5-3 8-7s5-6 8-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="4" cy="19" r="2" fill="currentColor"/><path d="M3 21h18" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity=".4"/></svg>
+      </div>
+      <div>
+        <h1>电池退化数据工作台</h1>
+        <p class="subtitle">双阶段退化函数 · 检测仪偏移与超量程删失 · 轮廓似然可分辨性 · 追加检测设计</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn ghost" id="btn-model-doc">模型定义</button>
+      <button class="btn ghost" id="btn-template">下载 CSV 模板</button>
+      <button class="btn" id="btn-import">导入 CSV</button>
+      <button class="btn ghost danger" id="btn-reset" title="清空追加测量与建议台账，重新载入当前场景">重置演示</button>
+      <button class="btn icon" id="btn-theme" title="切换深浅色" aria-label="切换主题">◐</button>
+    </div>
+  </header>
+
+  <!-- ===================== 场景条 ===================== -->
+  <section class="scenario-bar" id="scenario-bar">
+    <div class="scenario-label">内置数据：</div>
+    <div class="scenario-buttons" id="scenario-buttons"><!-- js --></div>
+  </section>
+  <div class="scenario-desc" id="scenario-desc"></div>
+
+  <!-- 全局提示 -->
+  <div class="banner-container" id="banner-container"></div>
+
+  <!-- ===================== 主体三栏 ===================== -->
+  <main class="layout">
+
+    <!-- ---------- 左栏：单体 + 共享假设 ---------- -->
+    <aside class="col col-left">
+      <section class="card">
+        <h2 class="card-title">单体选择 <span class="hint">点击编号或图上数据点</span></h2>
+        <div id="cell-tree" class="cell-tree"></div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">参数共享假设</h2>
+        <p class="card-note">不同批次可共享部分参数。作用域改变会重新拟合，未接受的建议将标记失效。</p>
+        <div class="scope-grid" id="scope-grid">
+          <label class="scope-row"><span>初始水平 a</span>
+            <select data-param="a"></select></label>
+          <label class="scope-row"><span>一阶段速率 b₁</span>
+            <select data-param="b1"></select></label>
+          <label class="scope-row"><span>二阶段速率 b₂−b₁</span>
+            <select data-param="b2"></select></label>
+          <label class="scope-row"><span>转折点 τ</span>
+            <select data-param="tau"></select></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">检测仪与寿命阈值</h2>
+        <label class="check-row">
+          <input type="checkbox" id="opt-offset" />
+          <span>显式建模检测仪加性偏移 δ</span>
+        </label>
+        <label class="field-row">
+          <span>参考仪器（δ=0）</span>
+          <select id="opt-ref-inst"></select>
+        </label>
+        <label class="field-row">
+          <span>EOL 寿命阈值 y<sub>EOL</sub></span>
+          <input type="number" id="opt-eol" min="50" max="95" step="1" />
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="opt-truth" />
+          <span>叠加合成数据真值曲线（核对拟合用）</span>
+        </label>
+      </section>
+
+      <section class="card budget-card">
+        <h2 class="card-title">样本破坏预算</h2>
+        <div class="budget-row">
+          <div class="budget-num"><span id="budget-used">0</span> / <span id="budget-total">3</span></div>
+          <div class="budget-meter"><div class="budget-fill" id="budget-fill"></div></div>
+        </div>
+        <p class="card-note" id="budget-note">每次接受一轮合成测量，按本轮试样/重复读数数量计入破坏数。</p>
+      </section>
+    </aside>
+
+    <!-- ---------- 中栏：图表 ---------- -->
+    <section class="col col-center">
+      <div class="card chart-card">
+        <div class="chart-head">
+          <h2 class="card-title" id="deg-title">退化轨迹与拟合</h2>
+          <div class="legend" id="deg-legend"></div>
+        </div>
+        <div id="deg-chart" class="chart-wrap"></div>
+        <div class="extrap-bar" id="extrap-bar"></div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="chart-head">
+          <h2 class="card-title">轮廓似然：参数是否可分辨</h2>
+          <div class="seg-tabs" id="profile-tabs">
+            <button data-pkind="life" class="active">关键寿命 L</button>
+            <button data-pkind="tau">转折点 τ</button>
+            <button data-pkind="b2">二阶段速率 b₂</button>
+            <button data-pkind="delta">仪器偏移 δ</button>
+          </div>
+        </div>
+        <div id="profile-summary" class="profile-summary"></div>
+        <div id="profile-chart" class="chart-wrap profile-wrap"></div>
+      </div>
+
+      <div class="card">
+        <div class="tabs" id="bottom-tabs">
+          <button data-tab="params" class="active">参数估计 / 拟合优度</button>
+          <button data-tab="residuals">残差图</button>
+          <button data-tab="data">数据表</button>
+        </div>
+        <div class="tab-panel" id="tab-params"></div>
+        <div class="tab-panel" id="tab-residuals" hidden>
+          <div id="residual-chart" class="chart-wrap residual-wrap"></div>
+        </div>
+        <div class="tab-panel" id="tab-data" hidden>
+          <div class="table-tools">
+            <input type="search" id="data-filter" placeholder="筛选单体 / 批次 / 检测仪…" />
+            <span class="hint" id="data-count"></span>
+          </div>
+          <div class="data-table-wrap" id="data-table"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- 右栏：建议 + 台账 ---------- -->
+    <aside class="col col-right">
+      <section class="card recommend-card" id="recommend-panel">
+        <h2 class="card-title">下一次检测建议</h2>
+        <div class="rec-form">
+          <label class="field-row"><span>目标单体</span><select id="rec-cell"></select></label>
+          <label class="field-row"><span>本轮试样数 / 重复读数 n</span>
+            <input type="number" id="rec-n" min="1" max="6" value="1" /></label>
+          <label class="field-row"><span>使用检测仪</span><select id="rec-inst"></select></label>
+          <button class="btn primary block" id="btn-recommend">计算候选时间与预期信息增益</button>
+        </div>
+        <div id="rec-result"></div>
+      </section>
+
+      <section class="card ledger-card">
+        <h2 class="card-title">建议台账与信息增益核对
+          <span class="hint">原始预测冻结，新数据到达后对比</span></h2>
+        <div id="ledger" class="ledger"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="footer">
+    本地计算 · 数据不出本机 · 95% 轮廓似然阈值 2Δℓ ≤ χ²₁,₀.₉₅ = 3.84 ·
+    预测增益为 Fisher/Schur 局部近似并用轮廓宽度校准，最终以新轮廓似然为准
+  </footer>
+</div>
+
+<!-- ===================== 导入弹窗 ===================== -->
+<div class="modal-backdrop" id="import-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>导入退化数据 CSV</h3>
+      <button class="btn icon" data-close="import-modal" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="card-note">
+        必需列：<code>cell</code>(单体)、<code>t</code>(时间)、<code>y</code>(读数)；
+        可选：<code>batch</code>、<code>instrument</code>、<code>censored</code>(none/right/left)、
+        <code>limit</code>(量程界限)、<code>repeat</code>。支持中文表头。
+        读数可直接写 <code>&gt;=100</code> / <code>&lt;60</code> 表示超量程删失。
+      </p>
+      <div class="import-drop" id="import-drop">
+        <input type="file" id="import-file" accept=".csv,text/csv" hidden />
+        <button class="btn" id="btn-pick-file">选择 CSV 文件</button>
+        <span>或把 CSV 拖到此处</span>
+      </div>
+      <div class="or">— 或粘贴 CSV 文本 —</div>
+      <textarea id="import-text" rows="7" placeholder="cell,batch,t,y,instrument,censored,limit&#10;C1,B1,0,99.2,INST-A,none,"></textarea>
+      <div class="import-errors" id="import-errors"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="import-modal">取消</button>
+      <button class="btn primary" id="btn-do-import">导入并拟合</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 模型定义弹窗 ===================== -->
+<div class="modal-backdrop" id="model-modal" hidden>
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3>双阶段退化模型与统计方法定义</h3>
+      <button class="btn icon" data-close="model-modal" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body doc" id="model-doc-body"><!-- js 注入 --></div>
+  </div>
+</div>
+
+<div id="tooltip" class="viz-tooltip" hidden></div>
+<div id="toast-stack" class="toast-stack"></div>
+
+<script src="charts.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

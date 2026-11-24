@@ -1,0 +1,4 @@
+record_id,batch,cell,t,y,censored,limit,instrument,repeat,provenance
+FAIL-001,BAT-X,X1,0.0,99.6,none,,INST-A,1,observed
+FAIL-002,BAT-X,X1,10.0,96.1,none,,INST-A,1,observed
+FAIL-003,BAT-X,X1,20.0,92.8,none,,INST-A,1,observed

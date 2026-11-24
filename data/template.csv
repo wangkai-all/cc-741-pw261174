@@ -1,0 +1,5 @@
+record_id,batch,cell,t,y,instrument,censored,limit,repeat
+EX-001,BAT-A,A01,0,99.4,INST-A,none,,1
+EX-002,BAT-A,A01,6,97.9,INST-A,none,,1
+EX-003,BAT-A,A01,12,">=100",INST-A,right,100,1
+# y 也可直接写 >100 / >=100（超上限右删失）或 <60 / <=60（低于下限左删失）
